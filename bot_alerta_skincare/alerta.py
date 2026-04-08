@@ -4,7 +4,7 @@ alerta.py - Bot de Alerta (GlowWise Skincare)
 Responsabilidades:
 - Ler os melhores preços na aba "melhores_precos" do Google Sheets
 - Montar uma mensagem resumida com os produtos encontrados
-- Enviar o alerta para o Telegram
+- Enviar o alerta para o Telegram usando plugin oficial do BotCity
 - Salvar um relatório TXT como artifact
 - Reportar o status final da task no Runner/Maestro
 """
@@ -14,10 +14,10 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any
 
-import requests
 from dotenv import load_dotenv
 from botcity.maestro import BotMaestroSDK, AutomationTaskFinishStatus
 from botcity.plugins.googlesheets import BotGoogleSheetsPlugin
+from botcity.plugins.telegram import BotTelegramPlugin
 
 
 # =========================
@@ -165,7 +165,7 @@ def montar_mensagem(itens: list[dict[str, Any]]) -> str:
     if not itens:
         return "Nenhuma oferta encontrada na aba melhores_precos."
 
-    linhas = ["*GlowWise Skincare - Melhores Precos*\n"]
+    linhas = ["GlowWise Skincare - Melhores Precos", ""]
 
     for i, item in enumerate(itens, start=1):
         produto = _obter_campo(item, "produto", "nome", "nome_produto", "titulo")
@@ -177,7 +177,7 @@ def montar_mensagem(itens: list[dict[str, Any]]) -> str:
             produto = "Produto sem nome"
 
         bloco = [
-            f"{i}. *{produto}*",
+            f"{i}. {produto}",
             f"Loja: {loja or 'Nao informado'}",
             f"Preco: {preco or 'Nao informado'}",
         ]
@@ -200,7 +200,7 @@ def montar_mensagem(itens: list[dict[str, Any]]) -> str:
 # TELEGRAM
 # =========================
 def dividir_mensagem(mensagem: str, limite: int = 3500) -> list[str]:
-    """Divide a mensagem em blocos menores para envio seguro ao Telegram."""
+    """Divide a mensagem em blocos menores para envio seguro."""
     if len(mensagem) <= limite:
         return [mensagem]
 
@@ -223,32 +223,33 @@ def dividir_mensagem(mensagem: str, limite: int = 3500) -> list[str]:
     return partes
 
 
-def enviar_telegram(maestro, mensagem: str) -> None:
-    """Envia a mensagem para o Telegram usando token e chat_id do Vault."""
-    token = obter_credencial(maestro, VAULT_LABEL_TELEGRAM, "token")
-    chat_id = obter_credencial(maestro, VAULT_LABEL_TELEGRAM, "chat_id")
+def iniciar_telegram(maestro) -> tuple[BotTelegramPlugin, str]:
+    """
+    Inicializa o plugin oficial do Telegram.
 
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    Espera no Vault:
+    - token: token do bot
+    - group: nome do grupo/canal/chat conforme configurado no plugin
+    """
+    token = obter_credencial(maestro, VAULT_LABEL_TELEGRAM, "token")
+    group = obter_credencial(maestro, VAULT_LABEL_TELEGRAM, "group")
+
+    telegram = BotTelegramPlugin(token=token)
+    return telegram, group
+
+
+def enviar_telegram(maestro, mensagem: str) -> None:
+    """Envia a mensagem para o Telegram usando o plugin oficial do BotCity."""
+    telegram, group = iniciar_telegram(maestro)
 
     for parte in dividir_mensagem(mensagem):
-        payload = {
-            "chat_id": chat_id,
-            "text": parte,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True,
-        }
+        resposta = telegram.send_message(
+            text=parte,
+            group=group,
+        )
 
-        resposta = requests.post(url, json=payload, timeout=60)
-
-        if resposta.status_code != 200:
-            raise RuntimeError(
-                f"Falha ao enviar mensagem no Telegram. "
-                f"Status={resposta.status_code} | Resposta={resposta.text}"
-            )
-
-        corpo = resposta.json()
-        if not corpo.get("ok"):
-            raise RuntimeError(f"Telegram retornou erro: {corpo}")
+        if not resposta:
+            raise RuntimeError("Falha ao enviar mensagem no Telegram: resposta vazia do plugin.")
 
     print("[OK] Mensagem enviada para o Telegram com sucesso.")
 

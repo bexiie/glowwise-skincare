@@ -1,4 +1,4 @@
 botcity-maestro-sdk
 botcity-googlesheets-plugin
 python-dotenv
-requests
+botcity-telegram-plugin

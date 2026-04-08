@@ -1,0 +1,8 @@
+.env
+.venv/
+.rpa-rebecca/
+__pycache__/
+*.pyc
+*.log
+**/client_secret.json
+**/token_sheets.json

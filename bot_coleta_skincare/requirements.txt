@@ -1,0 +1,7 @@
+botcity-framework-web
+botcity-maestro-sdk
+python-dotenv
+beautifulsoup4
+lxml
+webdriver-manager
+selenium==4.10.0

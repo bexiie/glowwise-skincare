@@ -1,0 +1,4 @@
+botcity-maestro-sdk
+botcity-googlesheets-plugin
+python-dotenv
+pandas

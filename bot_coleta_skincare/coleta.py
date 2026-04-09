@@ -46,12 +46,12 @@ DATAPOOL_TERMOS_LABEL = "rebecca-skincare-termos"
 ARTIFACTS_DIR = BASE_DIR / "artifacts" / "coleta"
 OUTPUT_JSON = ARTIFACTS_DIR / "coleta.json"
 
-BASES = ["hidratante facial", "gel de limpeza facial"]
+BASE = "hidratante facial"
 ATIVOS = ["vitamina c", "niacinamida"]
 
-MAX_RESULTADOS_POR_LOJA = 10
+MAX_RESULTADOS_POR_LOJA = 5
 TEMPO_ESPERA = 2
-WAIT_TIMEOUT = 6
+WAIT_TIMEOUT = 5
 
 BotMaestroSDK.RAISE_NOT_CONNECTED = True
 
@@ -68,7 +68,7 @@ def esperar(segundos=TEMPO_ESPERA):
 
 
 def gerar_termos_padrao():
-    return [f"{b} {a}" for b in BASES for a in ATIVOS]
+    return [f"{BASE} {a}" for a in ATIVOS]
 
 
 def ler_bool_env(nome_variavel: str, padrao: bool = False) -> bool:
@@ -82,6 +82,55 @@ def ler_bool_env(nome_variavel: str, padrao: bool = False) -> bool:
         return padrao
 
     return str(valor).strip().lower() in ("1", "true", "yes", "sim", "on")
+
+
+def limpar_nome_produto(texto):
+    """
+    Remove trechos promocionais e de preço do nome do produto.
+    """
+    texto = limpar_texto(texto)
+
+    cortes = [
+        " de R$",
+        " por R$",
+        " pagando no pix",
+        " avaliado com nota",
+        " com desconto",
+        " em até",
+    ]
+
+    for corte in cortes:
+        pos = texto.lower().find(corte.lower())
+        if pos != -1:
+            texto = texto[:pos].strip()
+
+    ruidos_inicio = [
+        "Outlet ,",
+        "Preço menor no App ,",
+        "Chegou na Beleza ,",
+        "Cruelty Free ,",
+        "Vegano ,",
+        "Dermocosmético ,",
+        "VIRAL NO TIKTOK ⚠️ ,",
+    ]
+
+    for prefixo in ruidos_inicio:
+        if texto.startswith(prefixo):
+            texto = texto[len(prefixo):].strip(" ,")
+
+    return texto[:120]
+
+
+def produto_corresponde_ao_termo(nome, termo):
+    nome = limpar_texto(nome).lower()
+    termo = limpar_texto(termo).lower()
+
+    palavras_relevantes = [
+        p for p in termo.split()
+        if p not in {"hidratante", "facial", "gel", "de", "limpeza"}
+    ]
+
+    return all(p in nome for p in palavras_relevantes)
 
 
 # =========================
@@ -140,7 +189,7 @@ def criar_bot():
 # =========================
 def extrair_preco(texto):
     """Extrai preço de string"""
-    match = re.search(r"R\$\s*\d+,\d{2}", texto)
+    match = re.search(r"R\$\s*\d+[.,]\d{2}", texto or "")
     return normalizar_preco(match.group()) if match else None
 
 
@@ -150,16 +199,21 @@ def extrair_cards(html, termo, loja):
     produtos = []
 
     for card in soup.select("a[href]"):
-        texto = limpar_texto(card.get_text())
+        link = card.get("href")
+        if not link:
+            continue
 
+        texto = limpar_texto(card.get_text(" ", strip=True))
         if not texto:
             continue
 
-        nome = texto[:120]
+        nome = limpar_nome_produto(texto)
         preco = extrair_preco(texto)
-        link = card.get("href")
 
         if nome_produto_valido(nome) and preco:
+            if not produto_corresponde_ao_termo(nome, termo):
+                continue
+
             produtos.append({
                 "produto": nome,
                 "termo_busca": termo,
@@ -173,6 +227,59 @@ def extrair_cards(html, termo, loja):
     return produtos[:MAX_RESULTADOS_POR_LOJA]
 
 
+def extrair_cards_drogasil(driver, termo):
+    produtos = []
+
+    titulos = driver.find_elements(
+        By.XPATH,
+        "//h2[.//a or normalize-space(text()) != '']"
+    )
+
+    for titulo in titulos:
+        try:
+            nome = limpar_nome_produto(limpar_texto(titulo.text))
+            if not nome_produto_valido(nome):
+                continue
+
+            if not produto_corresponde_ao_termo(nome, termo):
+                continue
+
+            bloco = titulo
+            for _ in range(5):
+                try:
+                    bloco = bloco.find_element(By.XPATH, "..")
+                except Exception:
+                    break
+
+                texto_bloco = limpar_texto(bloco.text)
+                preco = extrair_preco(texto_bloco)
+
+                if preco:
+                    link = None
+                    try:
+                        a = bloco.find_element(By.XPATH, ".//a[@href]")
+                        link = a.get_attribute("href")
+                    except Exception:
+                        link = None
+
+                    if link and "/search?" not in link:
+                        produtos.append({
+                            "produto": nome,
+                            "termo_busca": termo,
+                            "loja": "Drogasil",
+                            "preco": preco,
+                            "link": link,
+                            "disponivel": True,
+                            "data_coleta": agora_str(),
+                        })
+                        break
+
+        except Exception:
+            continue
+
+    return produtos[:MAX_RESULTADOS_POR_LOJA]
+
+
 # =========================
 # BUSCAS
 # =========================
@@ -182,10 +289,15 @@ def buscar(bot, url, termo, loja):
 
     try:
         WebDriverWait(bot.driver, WAIT_TIMEOUT).until(
-            lambda d: d.find_elements(By.TAG_NAME, "a")
+            lambda d: len(d.find_elements(By.TAG_NAME, "a")) > 20
         )
     except Exception:
         esperar(1)
+
+    esperar(2)
+
+    if loja == "Drogasil":
+        return extrair_cards_drogasil(bot.driver, termo)
 
     html = bot.driver.page_source
     return extrair_cards(html, termo, loja)
@@ -218,19 +330,35 @@ def main():
         for termo in termos:
             print(f"[BUSCA] {termo}")
 
-            registros += buscar(
+            resultado_drogasil = buscar(
                 bot,
-                f"https://www.drogasil.com.br/search?w={termo}",
+                f"https://www.drogasil.com.br/search?w={termo.replace(' ', '+')}",
                 termo,
                 "Drogasil",
             )
+            print(f"[INFO] Drogasil - {termo}: {len(resultado_drogasil)} itens")
+            registros += resultado_drogasil
 
-            registros += buscar(
+            resultado_bnw = buscar(
                 bot,
-                f"https://www.belezanaweb.com.br/busca?q={termo}",
+                f"https://www.belezanaweb.com.br/busca?q={termo.replace(' ', '+')}",
                 termo,
                 "Beleza na Web",
             )
+            print(f"[INFO] Beleza na Web - {termo}: {len(resultado_bnw)} itens")
+            registros += resultado_bnw
+
+        if not registros:
+            finalizar_task(
+                maestro,
+                execution,
+                AutomationTaskFinishStatus.FAILED,
+                "Nenhum registro foi coletado.",
+                total_items=len(termos),
+                processed_items=0,
+                failed_items=len(termos),
+            )
+            return
 
         salvar_json(registros, str(OUTPUT_JSON))
         enviar_datapool(maestro, registros)

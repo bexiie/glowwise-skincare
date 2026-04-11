@@ -273,3 +273,5 @@ O sistema envia notificações quando:
 ## 🚀 Conclusão
 
 O GlowWise Skincare demonstra como a automação pode ser aplicada para resolver problemas do dia a dia, tornando o monitoramento de preços mais eficiente, organizado e útil para decisões de compra mais conscientes.
+
+> **Propriedade Intelectual:** Este projeto e todo o seu código-fonte, automações e artefatos são de propriedade da LG Electronics do Brasil Ltda., desenvolvido no âmbito do projeto AX Academy --- Digital Transformation (Convênio N.º 005/2025 --- INOVA / IFAM). Consulte o arquivo LICENSE para mais detalhes.

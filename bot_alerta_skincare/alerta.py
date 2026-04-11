@@ -104,8 +104,13 @@ def finalizar_task(
 def obter_credencial(maestro, label: str, key: str) -> str:
     """Lê uma credencial do Vault e falha se ela não estiver configurada."""
     valor = maestro.get_credential(label=label, key=key)
-    if not valor:
+    if valor is None:
         raise ValueError(f"Credencial nao encontrada no Vault. label='{label}', key='{key}'")
+
+    valor = str(valor).strip()
+    if not valor:
+        raise ValueError(f"Credencial vazia no Vault. label='{label}', key='{key}'")
+
     return valor
 
 
@@ -190,9 +195,6 @@ def montar_mensagem(itens: list[dict[str, Any]]) -> str:
 
     mensagem = "\n".join(linhas).strip()
 
-    if len(mensagem) > 3800:
-        mensagem = mensagem[:3800] + "\n\n...mensagem truncada."
-
     return mensagem
 
 
@@ -220,7 +222,7 @@ def dividir_mensagem(mensagem: str, limite: int = 3500) -> list[str]:
     if atual:
         partes.append("".join(atual).strip())
 
-    return partes
+    return [parte for parte in partes if parte.strip()]
 
 
 def iniciar_telegram(maestro) -> tuple[BotTelegramPlugin, str]:
@@ -229,7 +231,7 @@ def iniciar_telegram(maestro) -> tuple[BotTelegramPlugin, str]:
 
     Espera no Vault:
     - token: token do bot
-    - group: nome do grupo/canal/chat conforme configurado no plugin
+    - group: nome do grupo/chat OU chat_id numerico
     """
     token = obter_credencial(maestro, VAULT_LABEL_TELEGRAM, "token")
     group = obter_credencial(maestro, VAULT_LABEL_TELEGRAM, "group")
@@ -238,15 +240,54 @@ def iniciar_telegram(maestro) -> tuple[BotTelegramPlugin, str]:
     return telegram, group
 
 
+def _eh_chat_id(valor: str) -> bool:
+    """
+    Retorna True quando o valor parece ser um chat_id numerico do Telegram.
+    Exemplos validos:
+    -1001234567890
+    123456789
+    """
+    valor = str(valor).strip()
+    if not valor:
+        return False
+
+    if valor.startswith("-"):
+        return valor[1:].isdigit()
+
+    return valor.isdigit()
+
+
+def _enviar_parte_telegram(telegram: BotTelegramPlugin, destino: str, texto: str):
+    """
+    Envia uma parte da mensagem usando o plugin oficial do BotCity.
+
+    - Se o destino for numerico, envia diretamente pelo bot interno do plugin
+      usando chat_id.
+    - Caso contrario, usa o fluxo padrao do plugin com group=...
+    """
+    destino = str(destino).strip()
+
+    if _eh_chat_id(destino):
+        print(f"[INFO] Enviando Telegram por chat_id direto: {destino}")
+        return telegram.bot.send_message(chat_id=destino, text=texto)
+
+    print(f"[INFO] Enviando Telegram por nome de grupo: {destino!r}")
+    return telegram.send_message(text=texto, group=destino)
+
+
 def enviar_telegram(maestro, mensagem: str) -> None:
     """Envia a mensagem para o Telegram usando o plugin oficial do BotCity."""
     telegram, group = iniciar_telegram(maestro)
 
-    for parte in dividir_mensagem(mensagem):
-        resposta = telegram.send_message(
-            text=parte,
-            group=group,
-        )
+    print(f"[INFO] Destino Telegram configurado no Vault: {group!r}")
+
+    partes = dividir_mensagem(mensagem)
+    if not partes:
+        raise RuntimeError("Nao ha conteudo para enviar ao Telegram.")
+
+    for i, parte in enumerate(partes, start=1):
+        print(f"[INFO] Enviando parte {i}/{len(partes)} para o Telegram...")
+        resposta = _enviar_parte_telegram(telegram, group, parte)
 
         if not resposta:
             raise RuntimeError("Falha ao enviar mensagem no Telegram: resposta vazia do plugin.")
